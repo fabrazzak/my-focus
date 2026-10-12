@@ -345,6 +345,20 @@ class ServerModel with ChangeNotifier {
     }
   }
 
+  Future<bool> checkRequestNotificationPermission() async {
+    debugPrint("androidVersion $androidVersion");
+    if (androidVersion < 33) {
+      return true;
+    }
+    if (await AndroidPermissionManager.check(kAndroid13Notification)) {
+      debugPrint("notification permission already granted");
+      return true;
+    }
+    var res = await AndroidPermissionManager.request(kAndroid13Notification);
+    debugPrint("notification permission request result: $res");
+    return res;
+  }
+
   Future<bool> checkFloatingWindowPermission() async {
     debugPrint("androidVersion $androidVersion");
     if (androidVersion < 23) {
@@ -385,6 +399,7 @@ class ServerModel with ChangeNotifier {
         stopService();
       }
     } else {
+      await checkRequestNotificationPermission();
       if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
         await checkFloatingWindowPermission();
       }
@@ -592,6 +607,7 @@ class ServerModel with ChangeNotifier {
   }
 
   handleVoiceCall(Client client, bool accept) {
+    parent.target?.invokeMethod("cancel_notification", client.id);
     bind.cmHandleIncomingVoiceCall(id: client.id, accept: accept);
   }
 
@@ -664,10 +680,12 @@ class ServerModel with ChangeNotifier {
       if (!client.isFileTransfer && !client.isTerminal) {
         parent.target?.invokeMethod("start_capture");
       }
+      parent.target?.invokeMethod("cancel_notification", client.id);
       client.authorized = true;
       notifyListeners();
     } else {
       bind.cmLoginRes(connId: client.id, res: res);
+      parent.target?.invokeMethod("cancel_notification", client.id);
       final index = _clients.indexOf(client);
       tabController.remove(index);
       _clients.remove(client);
@@ -690,6 +708,7 @@ class ServerModel with ChangeNotifier {
           }
         }
         parent.target?.dialogManager.dismissByTag(getLoginDialogTag(id));
+        parent.target?.invokeMethod("cancel_notification", id);
       }
       if (desktopType == DesktopType.cm && _clients.isEmpty) {
         hideCmWindow();

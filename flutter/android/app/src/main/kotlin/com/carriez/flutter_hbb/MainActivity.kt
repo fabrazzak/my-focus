@@ -346,6 +346,14 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(true)
                 }
+                "cancel_notification" -> {
+                    if (call.arguments is Int) {
+                        val id = call.arguments as Int
+                        mainService?.cancelNotification(id)
+                    } else {
+                        result.success(true)
+                    }
+                }
                 "enable_soft_keyboard" -> {
                     // https://blog.csdn.net/hanye2020/article/details/105553780
                     if (call.arguments as Boolean) {
