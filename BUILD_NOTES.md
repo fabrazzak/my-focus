@@ -187,11 +187,111 @@ Copy-Item ..\..\target\release\rustdesk-portable-packer.exe ..\..\target\release
 - Tested OK: window title, taskbar, tray, About page, exe properties, installer name, runs alongside official RustDesk.
 - `generate.py` leaves `libs\portable\data.bin` and `app_metadata.toml` behind (ignored by git).
 
+## Android APK (arm64-v8a) in WSL (2026-10-12): success
+
+Follows CI job `build-rustdesk-android` (`.github/workflows/flutter-build.yml`, target `aarch64-linux-android`),
+except: own release keystore instead of CI's debug key, and bridge files copied from the Windows tree
+instead of a separate bridge job.
+
+### Environment
+| Item | Version / location |
+|---|---|
+| WSL distro | `Ubuntu-24.04` (= CI `ubuntu-24.04`), user `user`, 8 CPU / 9.6 GiB. Virtual disk **moved to `D:\WSL\Ubuntu-24.04\ext4.vhdx`** (C: is too small) |
+| apt | CI's package list + `build-essential unzip zip xz-utils` + **`libssl-dev file`** (the runner image has libssl-dev preinstalled; without it `openssl-sys` fails in a host build script) |
+| Java | OpenJDK 17.0.20.1, `/usr/lib/jvm/java-17-openjdk-amd64` |
+| Rust | **1.75.0** + rustfmt + target `aarch64-linux-android`, `~/.rustup`, `~/.cargo` |
+| cargo-ndk | **3.1.2** |
+| Android SDK | `~/Android/Sdk`: cmdline-tools (latest), platform-tools, `platforms;android-31..34,36`, `build-tools;35.0.0` |
+| NDK | **r28c** = `ndk;28.2.13676358` |
+| Flutter | **3.24.5** (sha256-verified tarball) + dropdown patch, `~/flutter` |
+| vcpkg | commit **9e593bb** at `~/vcpkg`, triplet `arm64-android` (+ host `x64-linux` copies, per `vcpkg.json`) |
+| Build clone | `~/myfocus` (cloned from the Windows repo; build there, not under `/mnt/e`) |
+| Env file | `~/myfocus-env.sh` (cargo env, `ANDROID_HOME`, `ANDROID_NDK_HOME`, `JAVA_HOME`, `VCPKG_ROOT`, PATH). Source it in every shell |
+| Gradle | AGP 8.10.1, Gradle 8.11.1. `~/.gradle/gradle.properties` has `android.builder.sdkDownload=false` so Gradle fails instead of silently downloading SDK/NDK packages |
+
+### One-time setup (in `Ubuntu-24.04`, as `user` unless noted)
+```bash
+# apt (needs sudo): CI list + extras
+sudo apt-get install -y clang cmake curl gcc-multilib git g++ g++-multilib libayatana-appindicator3-dev \
+  libasound2-dev libc6-dev libclang-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  libgtk-3-dev libpulse-dev libva-dev libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxdo-dev \
+  libxfixes-dev llvm-dev nasm ninja-build openjdk-17-jdk-headless pkg-config tree wget \
+  build-essential unzip zip xz-utils libssl-dev file
+# Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.75 -c rustfmt -t aarch64-linux-android
+cargo install cargo-ndk --version 3.1.2 --locked
+# Android SDK: unzip commandlinetools-linux-*_latest.zip (sha1 from repository2-3.xml) to ~/Android/Sdk/cmdline-tools/latest, then
+yes | sdkmanager --licenses
+sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0" "ndk;28.2.13676358" \
+  "platforms;android-31" "platforms;android-32" "platforms;android-33" "platforms;android-34"   # 31-34: compileSdk of Flutter plugins
+# Flutter 3.24.5 + patch
+tar -xf flutter_linux_3.24.5-stable.tar.xz -C ~
+cd ~/flutter && git apply ~/myfocus/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+flutter config --no-analytics; flutter precache --android
+# vcpkg
+git clone --filter=blob:none https://github.com/microsoft/vcpkg ~/vcpkg && git -C ~/vcpkg checkout 9e593bb18ea69cc5095e012465dcd675a822ed0d
+~/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+cd ~/myfocus && bash ./flutter/build_android_deps.sh arm64-v8a        # ~26 min (ffmpeg 7.4 min)
+```
+
+### Every build
+```bash
+. ~/myfocus-env.sh; cd ~/myfocus
+# files not in git: copy from the Windows tree (Flutter 3.24.5-compatible lock + generated bridge), strip CR
+#   flutter/pubspec.lock, src/bridge_generated.rs, src/bridge_generated.io.rs,
+#   flutter/lib/generated_bridge.dart, flutter/lib/generated_bridge.freezed.dart
+bash ./flutter/ndk_arm64.sh                                            # Rust lib, ~17 min
+mkdir -p flutter/android/app/src/main/jniLibs/arm64-v8a
+cp $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so flutter/android/app/src/main/jniLibs/arm64-v8a/
+cp target/aarch64-linux-android/release/liblibrustdesk.so flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" flutter/android/gradle.properties
+cd flutter && flutter build apk --release --target-platform android-arm64 --split-per-abi   # ~12.5 min (33 min first time)
+# output: flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+### Result
+- **APK:** `D:\MyFocus-builds\MyFocus-1.5.0-arm64-v8a.apk` (30.6 MB), also `~/myfocus-out/` in WSL.
+- `aapt2`: package `com.myfocus.remote`, versionName 1.5.0, label `MyFocus`, native code `arm64-v8a`.
+- `apksigner`: signer `CN=MyFocus, O=MyFocus`, cert SHA-256 `bd054ce465dcc16c235a43b8890395faf753016d0804d70c254621674c356626`.
+
+### Signing
+- Release keystore: **`D:\MyFocus-signing\myfocus-release.jks`** (PKCS12, RSA 4096, alias `myfocus`, valid to 2054),
+  outside the repo, backed up off-PC with its password (`D:\MyFocus-signing\keystore-info.txt`). **Never commit it.**
+  Losing it or its password means the installed app can never be updated.
+- Gradle reads it through `~/myfocus/flutter/android/key.properties` (`storePassword`, `keyPassword`, `keyAlias`,
+  `storeFile=/mnt/d/MyFocus-signing/myfocus-release.jks`). Git-ignored by `flutter/android/.gitignore` and the root `.gitignore`.
+
+### Android branding
+| File | Change |
+|---|---|
+| `flutter/android/app/build.gradle` | `applicationId "com.myfocus.remote"` (namespace stays `com.carriez.flutter_hbb`; Kotlin uses `context.packageName`, JNI uses the namespace) |
+| `flutter/android/app/src/main/AndroidManifest.xml` | app label `MyFocus`, accessibility service label `MyFocus Input` |
+| `flutter/android/app/src/main/res/values/strings.xml` | `app_name` + 2 descriptions → MyFocus |
+| `.../flutter_hbb/BootReceiver.kt` | toast "MyFocus is Open" |
+| `.../flutter_hbb/MainService.kt` | notification title, channel name/description → MyFocus |
+
+Left on purpose: translation keys such as "Show RustDesk" (`src/lang.rs` swaps in the app name at runtime),
+internal IDs (`channelId`, `RustDeskVD`), the `rustdesk://` deep-link scheme (parsed in `common.dart`), rustdesk.com links.
+Default icons.
+
+### Errors hit and fixes
+| Error | Cause | Fix |
+|---|---|---|
+| `wsl --manage --move` → `E_ACCESSDENIED`, distro then failed with `ERROR_FILE_NOT_FOUND` | Move copied the vhdx to D: and deleted the C: copy, but could not update the registration (non-admin terminal) | Set `BasePath` = `D:\WSL\Ubuntu-24.04` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss\{guid}` (backup of the key taken first) |
+| `./flutter/build_android_deps.sh: Permission denied` | Repo committed from Windows, so `*.sh` have no exec bit | Run scripts with `bash ./flutter/...` |
+| `openssl-sys`: could not find OpenSSL (`$TARGET = x86_64-unknown-linux-gnu`) | Host build script needs libssl-dev; preinstalled on CI runners | `sudo apt-get install libssl-dev` |
+| Gradle: `Failed to find target with hash string 'android-33'` | Flutter plugins compile against android-31..34; CI runner has them; auto-download is disabled here | `sdkmanager --install "platforms;android-31".."android-34"` |
+| `flutter doctor`: "Android license status unknown" | Flutter 3.24 can't parse the new cmdline-tools ("Android CLI") output | Harmless: `~/Android/Sdk/licenses/android-sdk-license` exists and Gradle accepts it |
+| apksigner: `app-metadata.properties not protected by signature` | Normal AGP v1-JAR warning | Harmless (v2/v3 signatures cover the APK) |
+
+Cleanup option: `~/vcpkg/buildtrees` (1.2 GB) can be deleted; `installed/` is what the build uses.
+
 ## Still to do (status at time of writing)
 1. ~~Rebuild with branding, rename to `MyFocus.exe`~~: done (see above).
 2. ~~Self-extracting installer~~: done.
 3. ~~Check branding in title, taskbar, tray, About, installer~~: done.
 4. ~~Commit~~: done, as a fresh repo pushed to the private origin (see "Git repository").
 5. ~~Git remotes~~: now a private GitHub `origin` only (see "Git repository").
-6. Android APK (arm64-v8a) in WSL Ubuntu, following CI job `build-rustdesk-android`. **On hold:** Android feature changes to be discussed first. Android branding (app ID, label, Kotlin package, strings) is not applied yet; see CODEBASE_REPORT.md §4.
+6. ~~Android APK (arm64-v8a) in WSL~~: done, branded and signed (see "Android APK"). Next: test on a phone, then the
+   Android feature changes (auto-start, remember-accept, settings lock), which are deliberately not in this build.
 7. Icons are still RustDesk's (Windows and Android).
