@@ -109,7 +109,7 @@ changes `extended_text` 14.0.0 to 13.0.0 in pubspec.yaml. That fallback was **no
 | Log: `printer_driver_adapter.dll not found` | CI downloads the printer driver after the build; this was skipped | Harmless |
 | `sed -i` edits converted CRLF to LF in some working files | Git-bash sed | Harmless: `.gitattributes` has `* text=auto`, so git stores LF anyway. Optional: `git checkout -- <file>` after committing restores CRLF |
 
-## Branding: branch `custom-brand` (main repo + `libs/hbb_common`)
+## Branding (originally branch `custom-brand`, now `main` of the private repo; see "Git repository")
 
 Values: app name **MyFocus**, company **MyFocus**, default icons, Android app ID **com.myfocus.remote**,
 server/key **unchanged** (`libs/hbb_common/src/config.rs:117-118`, to be set later).
@@ -140,26 +140,58 @@ Already off for custom clients, no change needed: the "Check for software update
 (desktop + mobile), the "new version → Download" card (`desktop_home_page.dart:431`), and the mobile
 update button (`connection_page.dart:122`). The homepage and privacy links to rustdesk.com remain.
 
-### Git remotes
-The GitHub remotes were removed from both repos (`git remote remove upstream`). Local branches and
-history are kept, and nothing can be pushed. `.gitmodules` still names the hbb_common URL, which is only
-used if `git submodule update` is run.
+### Git repository
+On 2026-10-12 the original `.git` folder (upstream history, both `custom-brand` branches, and the
+submodule's repo under `.git\modules`) disappeared from disk before the branding was committed. The
+working files were intact. The repo was re-created from the working tree:
 
-### Re-applying on a new RustDesk release
+- **Remote:** `origin` = https://github.com/fabrazzak/my-focus.git (private, fetch + push), branch `main`.
+  There is **no upstream remote** and no RustDesk history: the first commit `e74ea46` is the full tree.
+- **hbb_common is vendored**: `libs/hbb_common/` is ordinary files in this repo (not a submodule).
+  `.gitmodules` and the stale `libs/hbb_common/.git` pointer file are left on disk but are not tracked.
+- **`.gitignore`**: a "MyFocus additions" block was appended. It re-includes `*png/*svg/*jpg`, because
+  upstream ignores them and a fresh `git add` would otherwise drop every icon. It also ignores build
+  outputs (`/flutter/build/`, `/target/`, `libs/portable/data.bin`, `app_metadata.toml`),
+  `flutter/pubspec.lock`, `/.gitmodules`, and keystores/secrets.
+- **Fresh clone:** the generated bridge files are ignored, so run step **a** (bridge codegen) before building.
+- Commit messages from Windows PowerShell 5.1: pass them with `-m`. Piping a here-string into
+  `git commit -F -` adds a UTF-8 BOM to the subject (this happened in `e74ea46`; left as is).
+
+### Updating to a new RustDesk release
+Upstream history was dropped, so there is no merge or rebase path. Updates are a **manual file comparison**:
 ```powershell
-# re-add the remotes (fetch only), then fetch
-git remote add upstream https://github.com/rustdesk/rustdesk.git
-git -C libs/hbb_common remote add upstream https://github.com/rustdesk/hbb_common
-git remote set-url --push upstream DISABLED; git -C libs/hbb_common remote set-url --push upstream DISABLED
-git fetch upstream; git -C libs/hbb_common fetch upstream
-# rebase custom-brand onto the new tag in both repos, or redo the table above by hand:
-#   search: "RustDesk Remote Desktop", "Purslane", APP_NAME, APP_PREFIX, showAutoUpdate, do_check_software_update
+# 1. Get the new release next to this repo (not inside it)
+git clone --recurse-submodules --branch <tag> https://github.com/rustdesk/rustdesk.git D:\dev\rustdesk-<tag>
+# 2. See what MyFocus changed vs the base it was built from (upstream c8532719, hbb_common 229b9045):
+#    clone that base too, then compare file by file
+git clone --recurse-submodules https://github.com/rustdesk/rustdesk.git D:\dev\rustdesk-base
+git -C D:\dev\rustdesk-base checkout c8532719; git -C D:\dev\rustdesk-base submodule update
+git diff --no-index D:\dev\rustdesk-base\src "E:\LOCAL MARKET PLACE\RustDesk\rustdesk\src"   # repeat per folder
+# 3. Copy the new release over this working tree (keep .git, .gitignore, BUILD_NOTES.md, CODEBASE_REPORT.md),
+#    then re-apply the branding table above by hand. Search terms:
+#    "RustDesk Remote Desktop", "Purslane", APP_NAME, APP_PREFIX, showAutoUpdate, do_check_software_update
+# 4. Rebuild, test, commit to main, push to origin.
 ```
 
+## Rebuild with branding (2026-10-12): success
+```powershell
+. D:\dev\env.ps1; cd "E:\LOCAL MARKET PLACE\RustDesk\rustdesk"
+python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+Rename-Item flutter\build\windows\x64\runner\Release\rustdesk.exe MyFocus.exe
+cd libs\portable; pip install -r requirements.txt
+python .\generate.py -f ..\..\flutter\build\windows\x64\runner\Release -o . -e ..\..\flutter\build\windows\x64\runner\Release\MyFocus.exe
+Copy-Item ..\..\target\release\rustdesk-portable-packer.exe ..\..\target\release\MyFocus-1.5.0-install.exe
+```
+- `build.py`: exit 0. Rust release build **6m 23s** (16 upstream warnings, all unused-code/naming), Flutter Windows build **2m 23s**.
+- Installer: `generate.py` exit 0 (it runs `cargo build --locked --release` itself). Output `target\release\MyFocus-1.5.0-install.exe` (25 MB).
+- Tested OK: window title, taskbar, tray, About page, exe properties, installer name, runs alongside official RustDesk.
+- `generate.py` leaves `libs\portable\data.bin` and `app_metadata.toml` behind (ignored by git).
+
 ## Still to do (status at time of writing)
-1. Rebuild with branding (command b above), then rename `Release\rustdesk.exe` → `MyFocus.exe`.
-2. Self-extracting installer: `cd libs\portable; pip install -r requirements.txt; python generate.py -f ..\..\flutter\build\windows\x64\runner\Release -o . -e ..\..\flutter\build\windows\x64\runner\Release\MyFocus.exe`. generate.py runs `cargo build --locked --release` itself, which produces `<repo>\target\release\rustdesk-portable-packer.exe`. Rename that to `MyFocus-1.5.0-install.exe` (same as `build.py` `build_flutter_windows`).
-3. Check the name in the window title, taskbar, tray, About page and installer.
-4. Commit: submodule first, then the main repo (leave out `flutter/pubspec.lock`).
-5. ~~Git remotes~~: done. First renamed `origin` → `upstream` with push disabled, then removed entirely (see "Git remotes").
-6. Android APK (arm64-v8a) in WSL Ubuntu, following CI job `build-rustdesk-android`.
+1. ~~Rebuild with branding, rename to `MyFocus.exe`~~: done (see above).
+2. ~~Self-extracting installer~~: done.
+3. ~~Check branding in title, taskbar, tray, About, installer~~: done.
+4. ~~Commit~~: done, as a fresh repo pushed to the private origin (see "Git repository").
+5. ~~Git remotes~~: now a private GitHub `origin` only (see "Git repository").
+6. Android APK (arm64-v8a) in WSL Ubuntu, following CI job `build-rustdesk-android`. **On hold:** Android feature changes to be discussed first. Android branding (app ID, label, Kotlin package, strings) is not applied yet; see CODEBASE_REPORT.md §4.
+7. Icons are still RustDesk's (Windows and Android).
