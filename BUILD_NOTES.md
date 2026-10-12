@@ -286,6 +286,32 @@ Default icons.
 
 Cleanup option: `~/vcpkg/buildtrees` (1.2 GB) can be deleted; `installed/` is what the build uses.
 
+## Android features (MyFocus additions)
+
+All Android-only and default OFF. Files: `flutter/lib/consts.dart`,
+`flutter/lib/mobile/pages/settings_page.dart`, `flutter/lib/mobile/pages/server_page.dart`.
+No Rust/shared changes (one local-option key only).
+
+| Feature | What it does |
+|---|---|
+| **Allow unattended access** (Settings → share-screen) | Sets the stock RustDesk unattended path: `verification-method = use-permanent-password` + `approve-mode = password`. A controller holding the permanent password connects with no on-device prompt (prompts to set a password first if none). OFF restores the default accept mode. Switch state is derived from those two options; no new storage. |
+| **Lock configuration** (Settings → share-screen) | Local option `myfocus-lock-config`. When ON, the ID/Relay server row (host + key) and the permanent-password / accept-mode / verification items are disabled, and the unattended switch is frozen. OFF re-enables them. Simple toggle, no PIN. |
+| **Boot start note** | The existing upstream "Start on boot" toggle is unchanged (default OFF). Added a one-line UI note that OPPO/Xiaomi/Vivo-style ROMs also need the OEM "Autostart" permission enabled manually, or boot start is blocked. After reboot the service/ID is automatic but MediaProjection (screen capture) still needs one manual tap on non-rooted phones. |
+
+## Notification policy (do not break)
+
+The screen-share **foreground-service notification is MANDATORY**:
+- Android requires a foreground service to post a notification; `startForeground(...)` must run within
+  ~5 s or the OS kills the MediaProjection service. **Removing it breaks screen capture on Android 10+.**
+- It is also the user-facing "sharing is active" indicator and must never be hidden.
+
+It was only **softened**, never removed (`MainService.kt`): channel `IMPORTANCE_LOW`, builder `PRIORITY_LOW`,
+`setDefaults(0)` (no sound/vibration), text "MyFocus / Running". Connection-request / authorized alerts keep
+`PRIORITY_MAX`. `POST_NOTIFICATIONS` stays in the manifest. A commit (`56c0822`) that stripped the
+notification, `startForeground` and the permission was reverted in `ff86bb1`. Do not re-remove it.
+Note: Android caches a channel's importance after first creation, so softened importance applies on fresh
+install or after clearing app data, not on an in-place update of an older channel.
+
 ## Still to do (status at time of writing)
 1. ~~Rebuild with branding, rename to `MyFocus.exe`~~: done (see above).
 2. ~~Self-extracting installer~~: done.
