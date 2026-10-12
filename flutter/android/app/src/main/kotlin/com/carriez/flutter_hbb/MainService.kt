@@ -4,7 +4,6 @@ import ffi.FFI
 
 /**
  * Capture screen,get video and audio,send to rust.
- * Dispatch notifications
  *
  * Inspired by [droidVNC-NG] https://github.com/bk138/droidVNC-NG
  */
@@ -12,15 +11,11 @@ import ffi.FFI
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.*
-import android.app.PendingIntent.FLAG_IMMUTABLE
-import android.app.PendingIntent.FLAG_UPDATE_CURRENT
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.content.res.Configuration.ORIENTATION_LANDSCAPE
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR
 import android.hardware.display.VirtualDisplay
@@ -36,8 +31,6 @@ import android.view.WindowManager
 import androidx.annotation.Keep
 import androidx.annotation.RequiresApi
 import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -46,11 +39,6 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import kotlin.math.max
 import kotlin.math.min
-
-const val DEFAULT_NOTIFY_TITLE = "MyFocus"
-const val DEFAULT_NOTIFY_TEXT = "Service is running"
-const val DEFAULT_NOTIFY_ID = 1
-const val NOTIFY_ID_OFFSET = 100
 
 const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_VP9
 
@@ -117,23 +105,12 @@ class MainService : Service() {
             "add_connection" -> {
                 try {
                     val jsonObject = JSONObject(arg1)
-                    val id = jsonObject["id"] as Int
-                    val username = jsonObject["name"] as String
-                    val peerId = jsonObject["peer_id"] as String
                     val authorized = jsonObject["authorized"] as Boolean
                     val isFileTransfer = jsonObject["is_file_transfer"] as Boolean
-                    val type = if (isFileTransfer) {
-                        translate("Transfer file")
-                    } else {
-                        translate("Share screen")
-                    }
                     if (authorized) {
                         if (!isFileTransfer && !isStart) {
                             startCapture()
                         }
-                        onClientAuthorizedNotification(id, type, username, peerId)
-                    } else {
-                        loginRequestNotification(id, type, username, peerId)
                     }
                 } catch (e: JSONException) {
                     e.printStackTrace()
@@ -142,15 +119,10 @@ class MainService : Service() {
             "update_voice_call_state" -> {
                 try {
                     val jsonObject = JSONObject(arg1)
-                    val id = jsonObject["id"] as Int
-                    val username = jsonObject["name"] as String
-                    val peerId = jsonObject["peer_id"] as String
                     val inVoiceCall = jsonObject["in_voice_call"] as Boolean
                     val incomingVoiceCall = jsonObject["incoming_voice_call"] as Boolean
                     if (!inVoiceCall) {
-                        if (incomingVoiceCall) {
-                            voiceCallRequestNotification(id, "Voice Call Request", username, peerId)
-                        } else {
+                        if (!incomingVoiceCall) {
                             if (!switchOutVoiceCall()) {
                                 Log.e(logTag, "switchOutVoiceCall fail")
                                 showVoiceCallError("Failed to switch out voice call.")
@@ -231,11 +203,6 @@ class MainService : Service() {
     // audio
     private val audioRecordHandle = AudioRecordHandle(this, { isStart }, { isAudioStart })
 
-    // notification
-    private lateinit var notificationManager: NotificationManager
-    private lateinit var notificationChannel: String
-    private lateinit var notificationBuilder: NotificationCompat.Builder
-
     override fun onCreate() {
         super.onCreate()
         Log.d(logTag,"MainService onCreate, sdk int:${Build.VERSION.SDK_INT} reuseVirtualDisplay:$reuseVirtualDisplay")
@@ -246,7 +213,6 @@ class MainService : Service() {
             serviceHandler = Handler(looper)
         }
         updateScreenInfo(resources.configuration.orientation)
-        initNotification()
 
         // keep the config dir same with flutter
         val prefs = applicationContext.getSharedPreferences(KEY_SHARED_PREFERENCES, FlutterActivity.MODE_PRIVATE)
@@ -254,8 +220,6 @@ class MainService : Service() {
         val homePath = applicationContext.getExternalFilesDir(null)?.absolutePath
             ?: applicationContext.filesDir.absolutePath
         FFI.startServer(configPath, homePath, "")
-
-        createForegroundNotification()
     }
 
     override fun onDestroy() {
@@ -685,7 +649,6 @@ class MainService : Service() {
         mediaProjectionForegroundService = false
         microphoneForegroundService = false
         checkMediaPermission()
-        stopForeground(true)
         stopService(Intent(this, FloatingWindowService::class.java))
         stopSelf()
     }
@@ -813,76 +776,6 @@ class MainService : Service() {
         }
     }
 
-    private fun initNotification() {
-        notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationChannel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelId = "RustDesk"
-            val channelName = "MyFocus Service"
-            val channel = NotificationChannel(
-                channelId,
-                channelName, NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "MyFocus Service Channel"
-            }
-            channel.lightColor = Color.BLUE
-            channel.lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-            notificationManager.createNotificationChannel(channel)
-            channelId
-        } else {
-            ""
-        }
-        notificationBuilder = NotificationCompat.Builder(this, notificationChannel)
-    }
-
-    @SuppressLint("UnspecifiedImmutableFlag")
-    private fun createForegroundNotification() {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            putExtra("type", type)
-        }
-        val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PendingIntent.getActivity(this, 0, intent, FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE)
-        } else {
-            PendingIntent.getActivity(this, 0, intent, FLAG_UPDATE_CURRENT)
-        }
-        val notification = notificationBuilder
-            .setOngoing(true)
-            .setSmallIcon(R.mipmap.ic_stat_logo)
-            .setDefaults(Notification.DEFAULT_ALL)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setContentTitle(DEFAULT_NOTIFY_TITLE)
-            .setContentText(translate(DEFAULT_NOTIFY_TEXT))
-            .setOnlyAlertOnce(true)
-            .setContentIntent(pendingIntent)
-            .setColor(ContextCompat.getColor(this, R.color.primary))
-            .setWhen(System.currentTimeMillis())
-            .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(DEFAULT_NOTIFY_ID, notification, foregroundServiceType())
-        } else {
-            startForeground(DEFAULT_NOTIFY_ID, notification)
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun foregroundServiceType(): Int {
-        var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Keep a valid FGS type while the unattended host is idle and no capture type is active.
-            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        }
-        if (mediaProjectionForegroundService) {
-            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && microphoneForegroundService) {
-            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        }
-        return serviceType
-    }
-
     private fun setMediaProjectionForegroundService(enabled: Boolean): Boolean {
         return updateForegroundServiceTypes(enabled, microphoneForegroundService)
     }
@@ -895,109 +788,9 @@ class MainService : Service() {
         mediaProjectionEnabled: Boolean,
         microphoneEnabled: Boolean,
     ): Boolean {
-        if (mediaProjectionForegroundService == mediaProjectionEnabled &&
-            microphoneForegroundService == microphoneEnabled) {
-            return true
-        }
-        val previousMediaProjection = mediaProjectionForegroundService
-        val previousMicrophone = microphoneForegroundService
         mediaProjectionForegroundService = mediaProjectionEnabled
         microphoneForegroundService = microphoneEnabled
-        return try {
-            createForegroundNotification()
-            true
-        } catch (error: SecurityException) {
-            mediaProjectionForegroundService = previousMediaProjection
-            microphoneForegroundService = previousMicrophone
-            Log.e(logTag, "Failed to update foreground service types", error)
-            false
-        } catch (error: IllegalStateException) {
-            mediaProjectionForegroundService = previousMediaProjection
-            microphoneForegroundService = previousMicrophone
-            Log.e(logTag, "Failed to update foreground service types", error)
-            false
-        }
+        return true
     }
 
-    private fun loginRequestNotification(
-        clientID: Int,
-        type: String,
-        username: String,
-        peerId: String
-    ) {
-        val notification = notificationBuilder
-            .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setContentTitle(translate("Do you accept?"))
-            .setContentText("$type:$username-$peerId")
-            // .setStyle(MediaStyle().setShowActionsInCompactView(0, 1))
-            // .addAction(R.drawable.check_blue, "check", genLoginRequestPendingIntent(true))
-            // .addAction(R.drawable.close_red, "close", genLoginRequestPendingIntent(false))
-            .build()
-        notificationManager.notify(getClientNotifyID(clientID), notification)
-    }
-
-    private fun onClientAuthorizedNotification(
-        clientID: Int,
-        type: String,
-        username: String,
-        peerId: String
-    ) {
-        cancelNotification(clientID)
-        val notification = notificationBuilder
-            .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setContentTitle("$type ${translate("Established")}")
-            .setContentText("$username - $peerId")
-            .build()
-        notificationManager.notify(getClientNotifyID(clientID), notification)
-    }
-
-    private fun voiceCallRequestNotification(
-        clientID: Int,
-        type: String,
-        username: String,
-        peerId: String
-    ) {
-        val notification = notificationBuilder
-            .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setContentTitle(translate("Do you accept?"))
-            .setContentText("$type:$username-$peerId")
-            .build()
-        notificationManager.notify(getClientNotifyID(clientID), notification)
-    }
-
-    private fun getClientNotifyID(clientID: Int): Int {
-        return clientID + NOTIFY_ID_OFFSET
-    }
-
-    fun cancelNotification(clientID: Int) {
-        notificationManager.cancel(getClientNotifyID(clientID))
-    }
-
-    @SuppressLint("UnspecifiedImmutableFlag")
-    private fun genLoginRequestPendingIntent(res: Boolean): PendingIntent {
-        val intent = Intent(this, MainService::class.java).apply {
-            action = ACT_LOGIN_REQ_NOTIFY
-            putExtra(EXT_LOGIN_REQ_NOTIFY, res)
-        }
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PendingIntent.getService(this, 111, intent, FLAG_IMMUTABLE)
-        } else {
-            PendingIntent.getService(this, 111, intent, FLAG_UPDATE_CURRENT)
-        }
-    }
-
-    private fun setTextNotification(_title: String?, _text: String?) {
-        val title = _title ?: DEFAULT_NOTIFY_TITLE
-        val text = _text ?: translate(DEFAULT_NOTIFY_TEXT)
-        val notification = notificationBuilder
-            .clearActions()
-            .setStyle(null)
-            .setContentTitle(title)
-            .setContentText(text)
-            .build()
-        notificationManager.notify(DEFAULT_NOTIFY_ID, notification)
-    }
 }

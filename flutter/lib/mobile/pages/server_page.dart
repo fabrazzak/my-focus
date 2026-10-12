@@ -60,6 +60,9 @@ class _DropDownAction extends StatelessWidget {
               isOptionFixed(kOptionAllowNumericOneTimePassword);
           final isAllowNumericOneTimePassword =
               gFFI.serverModel.allowNumericOneTimePassword;
+          // MyFocus: Lock configuration freezes password / accept-mode changes
+          final lockConfig = isAndroid &&
+              bind.mainGetLocalOption(key: kOptionMyFocusLockConfig) == 'Y';
           return [
             if (!isChangeIdDisabled())
               PopupMenuItem(
@@ -72,24 +75,25 @@ class _DropDownAction extends StatelessWidget {
               value: 'AcceptSessionsViaPassword',
               child: listTile(
                   'Accept sessions via password', approveMode == 'password'),
-              enabled: !isApproveModeFixed,
+              enabled: !isApproveModeFixed && !lockConfig,
             ),
             PopupMenuItem(
               value: 'AcceptSessionsViaClick',
               child:
                   listTile('Accept sessions via click', approveMode == 'click'),
-              enabled: !isApproveModeFixed,
+              enabled: !isApproveModeFixed && !lockConfig,
             ),
             PopupMenuItem(
               value: "AcceptSessionsViaBoth",
               child: listTile("Accept sessions via both",
                   approveMode != 'password' && approveMode != 'click'),
-              enabled: !isApproveModeFixed,
+              enabled: !isApproveModeFixed && !lockConfig,
             ),
             if (showPasswordOption) const PopupMenuDivider(),
             if (showPasswordOption &&
                 verificationMethod != kUseTemporaryPassword &&
-                !isChangePermanentPasswordDisabled())
+                !isChangePermanentPasswordDisabled() &&
+                !lockConfig)
               PopupMenuItem(
                 value: "setPermanentPassword",
                 child: Text(translate("Set permanent password")),
@@ -109,19 +113,19 @@ class _DropDownAction extends StatelessWidget {
                 enabled: !isNumericOneTimePasswordFixed,
               ),
             if (showPasswordOption) const PopupMenuDivider(),
-            if (showPasswordOption)
+            if (showPasswordOption && !lockConfig)
               PopupMenuItem(
                 value: kUseTemporaryPassword,
                 child: listTile('Use one-time password',
                     verificationMethod == kUseTemporaryPassword),
               ),
-            if (showPasswordOption)
+            if (showPasswordOption && !lockConfig)
               PopupMenuItem(
                 value: kUsePermanentPassword,
                 child: listTile('Use permanent password',
                     verificationMethod == kUsePermanentPassword),
               ),
-            if (showPasswordOption)
+            if (showPasswordOption && !lockConfig)
               PopupMenuItem(
                 value: kUseBothPasswords,
                 child: listTile(
@@ -725,7 +729,6 @@ class ConnectionManager extends StatelessWidget {
       icon: const Icon(Icons.close),
       onPressed: () {
         bind.cmCloseConnection(connId: client.id);
-        gFFI.invokeMethod("cancel_notification", client.id);
       },
       label: Text(translate("Disconnect")),
     );
@@ -740,7 +743,6 @@ class ConnectionManager extends StatelessWidget {
           label: Text(translate("Stop")),
           onPressed: () {
             bind.cmCloseVoiceCall(id: client.id);
-            gFFI.invokeMethod("cancel_notification", client.id);
           },
         ),
       );

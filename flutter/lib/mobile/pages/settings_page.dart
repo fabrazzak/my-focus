@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
+import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart' show setPasswordDialog;
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -17,6 +18,7 @@ import '../../common/widgets/login.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
+import '../../models/server_model.dart' show kUsePermanentPassword;
 import '../widgets/deploy_dialog.dart';
 import '../widgets/dialog.dart';
 import 'home_page.dart';
@@ -106,6 +108,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _isUsingPublicServer = false;
   var _allowAskForNoteAtEndOfConnection = false;
   var _preventSleepWhileConnected = true;
+  var _unattendedAccess = false; // MyFocus: derived from approve-mode + verification-method
+  var _lockConfig = false; // MyFocus: lock host/key/password in the UI
 
   _SettingsState() {
     _enableAbr = option2bool(
@@ -153,6 +157,11 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         mainGetLocalBoolOptionSync(kOptionKeepAwakeDuringOutgoingSessions);
     _showTerminalExtraKeys =
         mainGetLocalBoolOptionSync(kOptionEnableShowTerminalExtraKeys);
+    _unattendedAccess =
+        bind.mainGetOptionSync(key: kOptionApproveMode) == 'password' &&
+            bind.mainGetOptionSync(key: kOptionVerificationMethod) ==
+                kUsePermanentPassword;
+    _lockConfig = mainGetLocalBoolOptionSync(kOptionMyFocusLockConfig);
   }
 
   @override
@@ -374,6 +383,64 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             })
     ];
     final List<AbstractSettingsTile> shareScreenTiles = [
+      if (isAndroid)
+        SettingsTile.switchTile(
+          title:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(translate('Allow unattended access')),
+            Text(
+                '* ${translate('A controller that has the permanent password connects without a prompt. The screen-sharing notification stays visible.')}',
+                style: Theme.of(context).textTheme.bodySmall),
+          ]),
+          initialValue: _unattendedAccess,
+          onToggle: _lockConfig
+              ? null
+              : (v) async {
+                  if (v) {
+                    setUnattended() async {
+                      await bind.mainSetOption(
+                          key: kOptionVerificationMethod,
+                          value: kUsePermanentPassword);
+                      await bind.mainSetOption(
+                          key: kOptionApproveMode, value: 'password');
+                      gFFI.serverModel.updatePasswordModel();
+                      setState(() => _unattendedAccess = true);
+                    }
+
+                    final hasPassword = (await bind.mainGetCommon(
+                            key: "permanent-password-set")) ==
+                        "true";
+                    if (hasPassword) {
+                      await setUnattended();
+                    } else {
+                      // need a permanent password first; toggle flips only on success
+                      setPasswordDialog(notEmptyCallback: setUnattended);
+                    }
+                  } else {
+                    await bind.mainSetOption(
+                        key: kOptionApproveMode,
+                        value: defaultOptionApproveMode);
+                    gFFI.serverModel.updatePasswordModel();
+                    setState(() => _unattendedAccess = false);
+                  }
+                },
+        ),
+      if (isAndroid)
+        SettingsTile.switchTile(
+          title:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(translate('Lock configuration')),
+            Text(
+                '* ${translate('Prevent changing the server, key, and password from this app. Turn off to allow changes.')}',
+                style: Theme.of(context).textTheme.bodySmall),
+          ]),
+          initialValue: _lockConfig,
+          onToggle: (v) async {
+            await bind.mainSetLocalOption(
+                key: kOptionMyFocusLockConfig, value: v ? 'Y' : 'N');
+            setState(() => _lockConfig = v);
+          },
+        ),
       SettingsTile.switchTile(
         title: Text(translate('Deny LAN discovery')),
         initialValue: _denyLANDiscovery,
@@ -603,6 +670,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           Text(
               '* ${translate('Start the screen sharing service on boot, requires special permissions')}',
               style: Theme.of(context).textTheme.bodySmall),
+          Text(
+              '* ${translate('On OPPO/Xiaomi/Vivo and similar, also enable "Autostart" for this app in the system settings, or it will not start on boot.')}',
+              style: Theme.of(context).textTheme.bodySmall),
         ]),
         onToggle: (toValue) async {
           if (toValue) {
@@ -752,12 +822,17 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             SettingsTile(
                 title: Text(translate('ID/Relay Server')),
                 leading: Icon(Icons.cloud),
-                onPressed: (context) {
-                  showServerSettings(gFFI.dialogManager, (callback) async {
-                    _isUsingPublicServer = await bind.mainIsUsingPublicServer();
-                    setState(callback);
-                  });
-                }),
+                trailing: _lockConfig ? Icon(Icons.lock_outline) : null,
+                onPressed: _lockConfig
+                    ? null
+                    : (context) {
+                        showServerSettings(gFFI.dialogManager,
+                            (callback) async {
+                          _isUsingPublicServer =
+                              await bind.mainIsUsingPublicServer();
+                          setState(callback);
+                        });
+                      }),
           if (!_hideNetwork && !_hideProxy)
             SettingsTile(
                 title: Text(translate('Socks5/Http(s) Proxy')),

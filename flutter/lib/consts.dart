@@ -132,6 +132,8 @@ const String kOptionAllowRemoteConfigModification =
     "allow-remote-config-modification";
 const String kOptionVerificationMethod = "verification-method";
 const String kOptionApproveMode = "approve-mode";
+// MyFocus: Android-only, locks host/key/password in the mobile UI. Local option.
+const String kOptionMyFocusLockConfig = "myfocus-lock-config";
 const String kOptionAllowNumericOneTimePassword =
     "allow-numeric-one-time-password";
 const String kOptionCollapseToolbar = "collapse_toolbar";
@@ -455,7 +457,6 @@ const kRecordAudio = "android.permission.RECORD_AUDIO";
 const kRequestIgnoreBatteryOptimizations =
     "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS";
 const kSystemAlertWindow = "android.permission.SYSTEM_ALERT_WINDOW";
-const kAndroid13Notification = "android.permission.POST_NOTIFICATIONS";
 
 /// Android channel invoke type key
 class AndroidChannel {
